@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "glenda"
+version = "0.0.1"
+description = "Risk neutral spread strategy focused on commodity-producing companies"
+authors = [
+  "edazizovv",
+]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "glenda"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -89,6 +89,24 @@ def conseq_check(data, max_lags):
     return data_checked
 
 
+def conseq_qr(row):
+    if pandas.isna(row).any():
+        return numpy.nan
+    else:
+        r = [1 if x > 0 else -1 for x in row]
+        return sum(r) / len(r)
+
+
+def conseq_rate(data, max_lags):
+    data_checked = data.copy()
+    cols = [x for x in data.columns if 'LAG' not in x]
+    for c in cols:
+        for max_lag in max_lags:
+            data_checked['{0}_QR{1}'.format(c, max_lag)] = data_checked[['{0}_LAG{1}'.format(c, j+1) for j in range(max_lag)]].apply(func=conseq_qr, axis=1)
+    data_checked = data_checked[[x for x in data_checked.columns if 'QR' in x]]
+    return data_checked
+
+
 def below_mean_conf(data, c, p):
     data_below = data.copy()
     for col in data_below.columns:
@@ -119,12 +137,145 @@ def beyond_mean_conf(data, c, p):
     return data_beyond
 
 
-data_silver_conf = pandas.concat((below_mean_conf(data=data_silver_pct, c=0.95, p=5),
-                                below_mean_conf(data=data_silver_pct, c=0.95, p=10),
-                                below_mean_conf(data=data_silver_pct, c=0.95, p=20),
+def to_max(data, p):
+    to_max_data = data.copy()
+    for col in to_max_data.columns:
+        series = to_max_data[col]
+        belows = numpy.full(shape=(series.shape[0],), fill_value=pandas.NA)
+        for t_low in range(series.shape[0] - p - 1):
+            t_up = t_low + p
+            sub = series[t_low:t_up]
+            belows[t_up + 1] = series[t_up] / sub.max()
+        to_max_data['{0}_MXR{1}'.format(col, p)] = belows
+    to_max_data = to_max_data.drop(columns=data.columns)
+    return to_max_data
+
+
+def to_min(data, p):
+    to_min_data = data.copy()
+    for col in to_min_data.columns:
+        series = to_min_data[col]
+        belows = numpy.full(shape=(series.shape[0],), fill_value=pandas.NA)
+        for t_low in range(series.shape[0] - p - 1):
+            t_up = t_low + p
+            sub = series[t_low:t_up]
+            belows[t_up + 1] = series[t_up] / sub.min()
+        to_min_data['{0}_MNR{1}'.format(col, p)] = belows
+    to_min_data = to_min_data.drop(columns=data.columns)
+    return to_min_data
+
+
+def trend(data, p):
+    to_trend_data = data.copy()
+    for col in to_trend_data.columns:
+        series = to_trend_data[col]
+        belows = numpy.full(shape=(series.shape[0],), fill_value=pandas.NA)
+        for t_low in range(series.shape[0] - p - 1):
+            t_up = t_low + p
+            sub = series[t_low:t_up]
+            lra = LinearRegression()
+            lra.fit(X=numpy.array(numpy.arange(sub.shape[0])).reshape(-1, 1), y=sub)
+            belows[t_up + 1] = lra.coef_[0]
+        to_trend_data['{0}_TRC{1}'.format(col, p)] = belows
+    to_trend_data = to_trend_data.drop(columns=data.columns)
+    return to_trend_data
+
+
+def max_tick_n(data, p):
+    max_tick_data = data.copy()
+    for col in max_tick_data.columns:
+        series = max_tick_data[col]
+        belows = numpy.full(shape=(series.shape[0],), fill_value=pandas.NA)
+        for t_low in range(series.shape[0] - p):
+            t_up = t_low + p
+            sub = series[t_low:t_up]
+            max_ix = sub.shape[0] - sub.tolist().index(sub.max())
+            belows[t_up] = max_ix
+        max_tick_data['{0}_MXT{1}'.format(col, p)] = belows
+    max_tick_data = max_tick_data.drop(columns=data.columns)
+    return max_tick_data
+
+
+def min_tick_n(data, p):
+    min_tick_data = data.copy()
+    for col in min_tick_data.columns:
+        series = min_tick_data[col]
+        belows = numpy.full(shape=(series.shape[0],), fill_value=pandas.NA)
+        for t_low in range(series.shape[0] - p):
+            t_up = t_low + p
+            sub = series[t_low:t_up]
+            min_ix = sub.shape[0] - sub.tolist().index(sub.min())
+            belows[t_up] = min_ix
+        min_tick_data['{0}_MNT{1}'.format(col, p)] = belows
+    min_tick_data = min_tick_data.drop(columns=data.columns)
+    return min_tick_data
+
+
+def mcr(x, down, up):
+    if x <= down:
+        return -1
+    elif x >= up:
+        return 1
+    else:
+        return 0
+
+
+def mean_conf_rate(data, c, p):
+    mean_conf_data = data.copy()
+    for col in mean_conf_data.columns:
+        series = mean_conf_data[col]
+        belows = numpy.full(shape=(series.shape[0],), fill_value=pandas.NA)
+        for t_low in range(series.shape[0] - p - 1):
+            t_up = t_low + p
+            sub = series[t_low:t_up]
+            support_down = sub.mean() - (c * sub.std() * numpy.power(sub.shape[0], -0.5))
+            support_up = sub.mean() + (c * sub.std() * numpy.power(sub.shape[0], -0.5))
+            r = [mcr(x, down=support_down, up=support_up) for x in sub]
+            belows[t_up + 1] = sum(r) / len(r)
+        mean_conf_data['{0}_MQL{1}_{2}'.format(col, p, c)] = belows
+    mean_conf_data = mean_conf_data.drop(columns=data.columns)
+    return mean_conf_data
+
+
+def below_mean_rate(data, c, p):
+    data_below = data.copy()
+    for col in data_below.columns:
+        series = data_below[col]
+        belows = numpy.full(shape=(series.shape[0],), fill_value=pandas.NA)
+        for t_low in range(series.shape[0] - p - 1):
+            t_up = t_low + p
+            sub = series[t_low:t_up]
+            support = sub.mean() - (c * sub.std() * numpy.power(sub.shape[0], -0.5))
+            r = [(-1) * int(x <= support) for x in sub]
+            belows[t_up + 1] = sum(r) / len(r)
+        data_below['{0}_CQL{1}_{2}'.format(col, p, c)] = belows
+    data_below = data_below.drop(columns=data.columns)
+    return data_below
+
+
+def beyond_mean_rate(data, c, p):
+    data_beyond = data.copy()
+    for col in data_beyond.columns:
+        series = data_beyond[col]
+        beyonds = numpy.full(shape=(series.shape[0],), fill_value=pandas.NA)
+        for t_low in range(series.shape[0] - p - 1):
+            t_up = t_low + p
+            sub = series[t_low:t_up]
+            support = sub.mean() + (c * sub.std() * numpy.power(sub.shape[0], -0.5))
+            r = [(-1) * int(x >= support) for x in sub]
+            beyonds[t_up + 1] = sum(r) / len(r)
+        data_beyond['{0}_CQY{1}_{2}'.format(col, p, c)] = beyonds
+    data_beyond = data_beyond.drop(columns=data.columns)
+    return data_beyond
+
+
+data_silver_conf = pandas.concat((beyond_mean_conf(data=data_silver_pct, c=0.95, p=5),
+                                beyond_mean_conf(data=data_silver_pct, c=0.95, p=10),
+                                beyond_mean_conf(data=data_silver_pct, c=0.95, p=20),
                                 beyond_mean_conf(data=data_silver_pct, c=0.95, p=5),
                                 beyond_mean_conf(data=data_silver_pct, c=0.95, p=10),
-                                beyond_mean_conf(data=data_silver_pct, c=0.95, p=20)), axis=1)
+                                beyond_mean_conf(data=data_silver_pct, c=0.95, p=20),
+                                  ), axis=1)
 
 data_silver_mean = pandas.concat((data_silver_pct.shift(periods=1).rolling(window=5).mean().rename(
     columns={x: '{0}__MW5'.format(x) for x in data_silver_pct.columns}),
@@ -156,8 +307,8 @@ data_silver_lagged_pct = lag(data_silver_pct, n_lags=20)
 data_silver_conseq = conseq_check(data=data_silver_lagged_pct, max_lags=[5, 10, 20])
 
 data_joint = data_silver_lagged_pct.copy()
-# data_joint = data_joint.merge(right=data_silver_lw, left_index=True, right_index=True, how='inner')
-# data_joint = data_joint.merge(right=data_silver_mean, left_index=True, right_index=True, how='inner')
+data_joint = data_joint.merge(right=data_silver_lw, left_index=True, right_index=True, how='inner')
+data_joint = data_joint.merge(right=data_silver_mean, left_index=True, right_index=True, how='inner')
 # data_joint = data_joint.merge(right=data_silver_conseq, left_index=True, right_index=True, how='inner')
 # data_joint = data_joint.merge(right=data_silver_conf, left_index=True, right_index=True, how='inner')
 data_joint = data_joint.dropna()
@@ -237,15 +388,15 @@ alpha = 0.05
 values = numpy.array([spearmanr(a=X_train[:, j], b=Y_train)[1] for j in range(X_train.shape[1])])
 fs_mask = values <= alpha
 """
-"""
+
 alpha = 0.05
 values = numpy.array([kendalltau(x=X_train[:, j], y=Y_train)[1] for j in range(X_train.shape[1])])
 fs_mask = values <= alpha
-"""
-"""
+
+
 X_train = X_train[:, fs_mask]
 X_test = X_test[:, fs_mask]
-"""
+
 mkw = {'n_estimators': 1000, 'max_depth': None, 'min_samples_leaf': 1, 'random_state': rs}
 
 # mkw = {'n_estimators': 1000, 'max_depth': 3, 'min_samples_leaf': 1, 'random_state': rs}
